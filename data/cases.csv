@@ -1,0 +1,186 @@
+symptom,topology_note,show_command_output,expected_fault,osi_layer,concept,severity
+PC_A cannot ping PC_B though both are supposed to be on the same subnet and connected to the same switch,"PC_A [192.168.10.10/24, Gateway 192.168.10.1] -> SW1 Fa0/2 (intended VLAN 10) ; PC_B [192.168.10.11/24, Gateway 192.168.10.1] -> SW1 Fa0/3 (intended VLAN 10)","SW1#show vlan brief
+VLAN     Name                           Status    Ports
+---- -------------------------------- --------- -------------------------------
+1             default                         active    Fa0/4, Fa0/5, Fa0/6, Fa0/7
+10           Sales                             active    Fa0/2
+20           Engineering               active    Fa0/3, Fa0/8","Fa0/3 was assigned to VLAN 20 instead of VLAN 10, placing PC_B in a different broadcast domain than PC_A",Layer 2,VLAN,Medium
+Intermittent connectivity issues in VLAN 1 and repeated CDP native VLAN mismatch syslog messages appear between SW1 and SW2,"SW1 Gi0/1 (trunk) <-> SW2 Gi0/1 (trunk), both carrying VLANs 1,10,20,30","SW1#show interfaces trunk
+Port        Mode         Encapsulation   Status          Native vlan
+Gi0/1       on                      802.1q          trunking          1
+
+SW2#show running-config interface gi0/1
+interface GigabitEthernet0/1
+switchport trunk encapsulation dot1q
+switchport mode trunk
+switchport trunk native vlan 99","Native VLAN mismatch on the trunk link - SW1 uses VLAN 1 while SW2 uses VLAN 99, causing CDP warnings and VLAN 1 traffic leakage",Layer 2,VLAN,Medium
+"PC_C connected to Fa0/5 has no connectivity at all, and the switch port status LED shows amber/orange","PC_C [192.168.30.10/24, Gateway 192.168.30.1] -> SW1 Fa0/5 (configured with switchport access vlan 30)","SW1#show vlan brief
+VLAN           Name                             Status    Ports
+---- -------------------------------- --------- -------------------------------
+1                    default                          active    Fa0/1, Fa0/2, Fa0/3, Fa0/4
+10                  Sales                              active    Fa0/6, Fa0/7
+
+SW1#show interfaces fa0/5 status
+Port        Name               Status       Vlan       Duplex          Speed Type
+Fa0/5     inactive            30              auto        auto               10/100BaseTX","VLAN 30 was never created in the VLAN database (missing 'vlan 30' global command), so Fa0/5 is placed in the inactive state",Layer 2,VLAN,High
+"Hosts in VLAN 40 cannot communicate with VLAN 40 hosts on the other switch, while VLANs 10, 20 and 30 work normally across the same trunk","SW1 Gi0/2 (trunk) <-> SW2 Gi0/2 (trunk), VLANs 10,20,30,40 exist on both switches","SW1#show interfaces trunk
+Port        Mode         Encapsulation      Status          Native vlan
+Gi0/2       on                802.1q                   trunking            1
+
+Vlans allowed on trunk
+Gi0/2       1,10,20,30","The 'switchport trunk allowed vlan' list on SW1 Gi0/2 excludes VLAN 40, so VLAN 40 frames are dropped before crossing the trunk",Layer 2,VLAN,Medium
+"All PCs in VLAN 10 and VLAN 20 fail to reach their default gateway on R1, even though the physical link lights on the switch are up","SW1 Fa0/1 (trunk) -> R1 Fa0/0 (router-on-a-stick); R1 Fa0/0.10 [192.168.10.1/24], R1 Fa0/0.20 [192.168.20.1/24]","R1#show ip interface brief
+Interface                             IP-Address      OK?   Method Status                       Protocol
+FastEthernet0/0              unassigned      YES     unset  administratively    down down
+FastEthernet0/0.10        192.168.10.1    YES     manual up                              down
+FastEthernet0/0.20        192.168.20.1    YES     manual up                              down","The physical parent interface Fa0/0 is administratively shut down, which disables all of its dependent subinterfaces",Layer 1,Gateway,Critical
+PC_B in VLAN 20 gets 'Destination host unreachable' when pinging its configured default gateway 192.168.20.1,"PC_B [192.168.20.10/24, Gateway 192.168.20.1] -> SW1 Fa0/2 (VLAN 20) -> trunk -> R1 Fa0/0.20","R1#show running-config interface fa0/0.20
+interface FastEthernet0/0.20
+encapsulation dot1Q 20
+ip address 192.168.21.1 255.255.255.0",Subinterface Fa0/0.20 is configured with the wrong subnet (192.168.21.0/24) instead of matching PC_B's subnet 192.168.20.0/24,Layer 3,Routing,High
+PCs in VLAN 30 cannot reach their gateway; the router subinterface appears configured but never processes tagged frames from that VLAN,"PC_C [192.168.30.10/24, Gateway 192.168.30.1] -> SW1 Fa0/3 (VLAN 30) -> trunk -> R1 Fa0/0.30","R1#show running-config interface fa0/0.30
+interface FastEthernet0/0.30
+ip address 192.168.30.1 255.255.255.0
+
+R1#show ip interface brief
+FastEthernet0/0.30          192.168.30.1    YES manual down                  down","Subinterface Fa0/0.30 is missing the 'encapsulation dot1Q 30' command, so it cannot process 802.1Q tagged VLAN 30 frames",Layer 2,Routing,High
+"Devices in VLAN 10 and VLAN 20 cannot reach each other through the Layer 3 switch, even though both SVIs show up/up and are correctly addressed","L3SW1 VLAN10 SVI [192.168.10.1/24, up/up], VLAN20 SVI [192.168.20.1/24, up/up]; PCs can ping their own gateway only","L3SW1#show ip route
+Codes: C - connected, S - static, O - OSPF
+Gateway of last resort is not set
+(no routes displayed)
+
+L3SW1#show running-config | include ip routing
+(no output returned)","Global command 'ip routing' is not enabled on the Layer 3 switch, so it is not routing between the VLAN interfaces despite both SVIs being up",Layer 3,Routing,Critical
+New PCs joining VLAN 10 fail to obtain an IP address; ipconfig shows an Automatic Private IP Address (169.254.x.x),"DHCP pool VLAN10, network 192.168.10.0/24, address range 192.168.10.10-192.168.10.20 (11 usable addresses), 15 hosts attempting to lease","R1#show ip dhcp pool VLAN10
+Pool VLAN10 :
+Utilization mark (high/low)    : 100 / 0
+Subnet size (first/last)              : 11 / 11
+Total addresses                            : 11
+Leased addresses                        : 11
+Pending event                              : none","The DHCP pool VLAN10 address range is fully exhausted (11 of 11 leased), leaving no addresses available for new clients",Layer 7,DHCP,High
+Only the very first PC to boot on VLAN 20 receives a DHCP lease; every subsequent PC fails to obtain an address,"DHCP pool VLAN20, network 192.168.20.0/24, default-router 192.168.20.1","R1#show running-config | section dhcp
+ip dhcp excluded-address 192.168.20.1 192.168.20.253
+ip dhcp pool VLAN20
+network 192.168.20.0 255.255.255.0
+default-router 192.168.20.1","The excluded-address range 192.168.20.1-192.168.20.253 is far too broad, leaving only a single usable address (192.168.20.254) in the pool",Layer 7,DHCP,Medium
+"PCs in VLAN 30 cannot obtain an IP address via DHCP, while PCs in VLAN 10 (same subnet as the DHCP server) lease addresses successfully",DHCP Server [192.168.10.5] in VLAN10; PC_D in VLAN30 -> R1 Fa0/0.30 [192.168.30.1/24] -> routed path to DHCP server subnet,"R1#show running-config interface fa0/0.30
+interface FastEthernet0/0.30
+encapsulation dot1Q 30
+ip address 192.168.30.1 255.255.255.0","Router subinterface Fa0/0.30 is missing the 'ip helper-address 192.168.10.5' command, so DHCP broadcast Discover packets from VLAN 30 are never relayed to the DHCP server",Layer 3,DHCP,High
+PCs in VLAN 40 receive an IP address from DHCP but cannot communicate with their default gateway or any other host,"DHCP pool VLAN40, intended network 192.168.40.0/24, default-router 192.168.40.1","R1#show running-config | section VLAN40
+ip dhcp pool VLAN40
+network 192.168.40.0 255.255.255.128
+default-router 192.168.40.1
+
+R1#show ip dhcp binding
+IP address             Client-ID/                            Lease expiration        Type
+192.168.40.130    0100.1122.3344.55               -- Infinite --          Automatic","The DHCP pool VLAN40 is configured with a /25 mask (255.255.255.128) instead of /24, causing clients to receive addresses (e.g. 192.168.40.130) outside the same broadcast domain as gateway 192.168.40.1",Layer 3,DHCP,Medium
+PCs can successfully ping IP addresses on the internet but cannot resolve any website by name (nslookup fails),PC_A [192.168.10.10/24] receiving DNS server assignment via DHCP pool VLAN10; internal DNS server is actually 192.168.100.53,"PC_A>ipconfig /all
+DNS Servers . . . . . . . . . . : 8.8.4.4
+
+PC_A>ping 8.8.4.4
+Request timed out.
+Request timed out.
+Request timed out.",The DHCP pool is handing out an unreachable/incorrect DNS server address (8.8.4.4) instead of the internal DNS server 192.168.100.53,Layer 7,DNS,Medium
+"PCs have the correct DNS server configured and can ping it directly, but web browsing still fails with DNS resolution timeouts",PC_A [192.168.10.10/24] -> R1 -> DNS Server [192.168.100.53]; extended ACL 101 applied inbound on R1 Fa0/1 facing the DNS server segment,"R1#show access-lists 101
+Extended IP access list 101
+10 deny udp any any eq 53
+20 permit ip any any","Extended ACL 101 explicitly denies UDP port 53 (DNS) ahead of the final permit statement, blocking all DNS query traffic",Layer 4,ACL,High
+"nslookup on PC_A times out with 'DNS request timed out', and web browsing by domain name fails even though ping to the DNS server's IP succeeds","PC_A [DNS server set to 192.168.100.53] -> Server1 [192.168.100.53/24, DNS service]","Server1 Services Configuration
+DNS Service : Off
+Resource Records configured : 4 (service currently disabled)","The DNS service on Server1 is disabled, so it never responds to resolution queries despite being reachable on the network",Layer 7,DNS,High
+R1 and R2 fail to form an OSPF neighbor adjacency; routes from the remote LAN are missing from R1's routing table,"R1 Gi0/0 [192.168.1.1/30, area 0] <-> R2 Gi0/0 [192.168.1.2/30, area 1]","R1#show ip ospf neighbor
+(no output returned)
+
+R1#show ip ospf interface gi0/0
+GigabitEthernet0/0 is up, line protocol is up
+%OSPF-4-ERRRXAREAID: Received Hello from area 1 on GigabitEthernet0/0 - area mismatch with local area 0",OSPF area mismatch between R1 (area 0) and R2 (area 1) on the shared link prevents the neighbor adjacency from forming,Layer 3,Routing,Critical
+OSPF neighbor between R1 and R2 stays stuck in EXSTART/EXCHANGE state and never reaches FULL; routing tables never converge,"R1 Gi0/1 [10.0.0.1/30, MTU 1500] <-> R2 Gi0/1 [10.0.0.2/30, MTU 1400]","R1#show ip ospf neighbor
+Neighbor ID     Pri        State           Dead Time      Address         Interface
+10.0.0.2               1       EXSTART/-     00:00:38          10.0.0.2        GigabitEthernet0/1","MTU mismatch between R1 (1500) and R2 (1400) on the shared segment prevents Database Description packet exchange, stalling the adjacency in EXSTART",Layer 3,Routing,High
+"R1 learns no routes from R2 via RIP, even though RIP is enabled on both routers and the serial link between them is up","R1 Serial0/0/0 [10.0.0.1/30, RIP version 2] <-> R2 Serial0/0/0 [10.0.0.2/30, RIP default version]","R2#show ip protocols
+Routing Protocol is ""rip""
+Sending updates every 30 seconds, next due in 12 seconds
+Invalid after 180 seconds, hold down 180, flushed after 240
+Default version control: send version 1, receive version 1
+Interface              Send    Recv   Key-chain
+Serial0/0/0              1          1","R1 is sending RIPv2 updates while R2 is configured to send and receive only RIPv1, so R2 discards R1's advertisements as an unsupported version",Layer 3,Routing,High
+Traffic from HQ to branch network 172.16.20.0/24 fails; the route appears in the routing table but ping and traceroute both die at the HQ router,"R1 (HQ) WAN link to R2 (Branch), actual R2 WAN interface address is 172.16.1.6/30; static route on R1 points to a different, unreachable next hop","R1#ping 172.16.20.1
+Type escape sequence to abort.
+Sending 5, 100-byte ICMP Echos to 172.16.20.1, timeout is 2 seconds:
+.....
+Success rate is 0 percent (0/5)
+
+R1#show ip route static
+S    172.16.20.0/24 [1/0] via 172.16.1.2","The static route's next-hop address 172.16.1.2 is incorrect; R2's actual WAN interface is 172.16.1.6, making the route unusable",Layer 3,Routing,High
+"R1 and R2 fail to establish an OSPF adjacency across their WAN link, and R1's routing table has no route to R2's LAN 192.168.50.0/24","R2 Gi0/0 [WAN link to R1, area 0], Gi0/1 [192.168.50.1/24 LAN, area 0]","R2#show ip protocols
+Routing Protocol is ""ospf 1""
+Routing for Networks:
+192.168.50.0/24
+10.0.0.0/30
+Passive Interface(s):
+GigabitEthernet0/0","The 'passive-interface' command was mistakenly applied to the WAN interface Gi0/0 instead of the LAN interface Gi0/1, suppressing OSPF hellos on the link needed for the neighbor relationship",Layer 3,Routing,Critical
+"The network administrator cannot Telnet or SSH into R1 from the management PC, although the PC can successfully ping R1's interface",Mgmt PC [10.0.0.5/24] -> R1 Fa0/0 [10.0.0.1/24]; VTY lines 0-4 protected by an access-class,"R1#show running-config | section line vty
+line vty 0 4
+access-class 10 in
+login local
+
+R1#show access-lists 10
+Standard IP access list 10
+10 permit host 10.0.0.100","Standard ACL 10 applied to the VTY lines only permits host 10.0.0.100, implicitly denying the management PC at 10.0.0.5",Layer 4,ACL,Medium
+"Internal users can ping the external web server's IP address, but the website will not load in any browser",PC [192.168.1.10/24] -> R1 -> extended ACL 110 applied outbound on Fa0/1 (internet-facing) -> Web Server [203.0.113.10],"R1#show access-lists 110
+Extended IP access list 110
+10 deny tcp any any eq 80
+20 deny tcp any any eq 443
+30 permit ip any any","Extended ACL 110 explicitly denies TCP ports 80 and 443 ahead of the final permit statement, blocking all HTTP and HTTPS traffic",Layer 4,ACL,High
+"After a minor ACL change intended to block a single external host, internal PCs lose all connectivity to every external resource",R1 Fa0/1 [internal LAN 192.168.1.0/24]; ACL 120 intended to block host 203.0.113.50 from reaching the LAN,"R1#show running-config interface fa0/1
+interface FastEthernet0/1
+ip address 192.168.1.1 255.255.255.0
+ip access-group 120 out
+
+R1#show access-lists 120
+Extended IP access list 120
+10 deny ip host 203.0.113.50 any
+20 permit ip any any","ACL 120 is applied outbound on the internal interface Fa0/1, filtering all traffic destined to the LAN instead of being applied inbound on the WAN-facing interface where the external host originates",Layer 3,ACL,High
+"After adding a rule to permit only SSH management traffic, all other traffic from the LAN to the WAN (web browsing, ping) stops working","R1 Fa0/0 [LAN]; ACL 130 applied inbound, intended only to add an SSH permit entry to existing policy","R1#show access-lists 130
+Extended IP access list 130
+10 permit tcp any any eq 22","ACL 130 contains only a single permit statement for SSH (TCP/22); with no other explicit permits, the implicit 'deny ip any any' at the end blocks all remaining traffic",Layer 3,ACL,Critical
+"Only one internal PC at a time can browse the internet; while that PC's session is active, every other PC's web requests fail","R1 (NAT router) inside network 192.168.1.0/24, outside interface Serial0/0/0 [203.0.113.1]","R1#show running-config | include ip nat inside source
+ip nat inside source list 1 interface Serial0/0/0
+
+R1#show ip nat translations
+Pro     Inside global      Inside local       Outside local      Outside global
+---       203.0.113.1          192.168.1.10                ---                          ---","The 'ip nat inside source list 1 interface Serial0/0/0' statement is missing the 'overload' keyword, so only one internal host can be translated at a time instead of many-to-one PAT",Layer 3,NAT,High
+"PCs on VLAN 20 (192.168.20.0/24) cannot access the internet, while PCs on VLAN 10 (192.168.10.0/24) browse normally through the same router",R1 NAT overload configured via access-list 1 on interface Gi0/0,"R1#show access-lists 1
+Standard IP access list 1
+10 permit 192.168.10.0 0.0.0.255
+
+R1#show ip nat translations
+Pro    Inside global            Inside local                 Outside local         Outside global
+tcp    203.0.113.1:1500     192.168.10.10:1500   93.184.216.34:80   93.184.216.34:80","NAT access-list 1 only matches the 192.168.10.0/24 network; the 192.168.20.0/24 subnet is not included, so VLAN 20 traffic is never translated",Layer 3,NAT,High
+NAT translations never occur; show ip nat translations remains empty even though the NAT ACL and overload configuration appear correct,R1 Fa0/0 [LAN 192.168.1.0/24] <-> Serial0/0/0 [WAN public address]; ip nat inside source list 1 interface Serial0/0/0 overload configured,"R1#show ip nat statistics
+Total active translations: 0 (0 static, 0 dynamic; 0 extended)
+Outside interfaces:
+none
+Inside interfaces:
+none
+Hits: 0  Misses: 0","Neither 'ip nat inside' nor 'ip nat outside' has been applied to the respective interfaces (Fa0/0 and Serial0/0/0), so the router never triggers NAT translation on traffic",Layer 3,NAT,Critical
+"Wireless laptops cannot see the 'CorpWiFi' network in their available networks list, while wired clients on the same VLAN connect and work normally",WLC1 managing AP1; WLAN 'CorpWiFi' mapped to interface vlan10 [192.168.10.0/24],"WLC1>show wlan summary
+WLAN ID       WLAN Profile / SSID          Status          Interface Name
+1                      CorpWiFi / CorpWiFi         Enabled      vlan10
+Broadcast SSID.......................... Disabled","The WLAN's 'Broadcast SSID' setting is disabled, so the SSID is not advertised in beacon frames and never appears in client scan results",Layer 2,Wireless,Medium
+"Wireless clients see the 'CorpWiFi' SSID and attempt to connect, but repeatedly fail with an 'incorrect password' or authentication error",WLAN 'CorpWiFi' security set to WPA2-PSK(AES) on WLC1; passphrase given to end users does not match the WLC configuration,"WLC1>show wlan 1
+Security
+WPA2 Preshared Key............. Configured (Hidden)
+Authentication Key Management.. PSK
+
+AP1#debug output
+%DOT11-4-MAXRETRIES: Packet to client aabb.cc11.2233 reached max retries, removing the client, 4-way handshake failure","The WPA2-PSK passphrase configured on the WLC does not match the passphrase being used by clients, causing repeated 4-way handshake failures",Layer 2,Wireless,Medium
+"AP1 powers on and appears to have link connectivity, but it never appears in the WLC's list of joined access points; the AP status LED cycles amber indefinitely","AP1 [DHCP client on VLAN10, 192.168.10.0/24] must discover WLC1's management interface [192.168.1.50, VLAN1] via DHCP option 43","R1#show ip dhcp pool VLAN10
+Pool VLAN10 :
+network 192.168.10.0 255.255.255.0
+default-router 192.168.10.1
+dns-server 192.168.10.5
+
+WLC1>show ap summary
+Number of APs.................................. 0","The DHCP pool VLAN10 is missing the 'option 43' entry containing the WLC management IP, so AP1 cannot discover the WLC and never joins",Layer 7,Wireless,Critical
